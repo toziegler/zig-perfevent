@@ -121,7 +121,7 @@ pub fn PerfEventBlockType(comptime BenchParamType: type) type {
         bench_params: *BenchParamType,
 
         const Sample = struct {
-            wall_time: u64,
+            wall_time: f64,
             cpu_cycles: f64,
             k_cycles: f64,
             instructions: f64,
@@ -224,7 +224,7 @@ pub fn PerfEventBlockType(comptime BenchParamType: type) type {
             const k_cycles = read_counter(&self.perf_events[1]);
             const task_clock = read_counter(&self.perf_events[6]);
             const sample = .{
-                .wall_time = end_time - self.begin_time,
+                .wall_time = @as(f64, @floatFromInt(end_time - self.begin_time)) / std.time.ns_per_s,
                 .cpu_cycles = (cycles / scale_f),
                 .k_cycles = (k_cycles / scale_f),
                 .instructions = (read_counter(&self.perf_events[2]) / scale_f),
