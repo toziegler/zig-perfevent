@@ -1,42 +1,92 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
+// bit flags of event domains
+const PerfEventDomain = struct {
+    const Flags = enum(u32) {
+        user = 0x1,
+        kernel = 0x2,
+        hypervisor = 0x4,
+    };
+
+    flags: u32,
+
+    pub fn is_user(self: PerfEventDomain) bool {
+        return (self.flags & user().flags) != 0;
+    }
+    pub fn is_kernel(self: PerfEventDomain) bool {
+        return (self.flags & kernel().flags) != 0;
+    }
+    pub fn is_hypervisor(self: PerfEventDomain) bool {
+        return (self.flags & hypervisor().flags) != 0;
+    }
+
+    pub fn user() PerfEventDomain {
+        return .{ .flags = @intFromEnum(Flags.user) };
+    }
+
+    pub fn kernel() PerfEventDomain {
+        return .{ .flags = @intFromEnum(Flags.kernel) };
+    }
+
+    pub fn hypervisor() PerfEventDomain {
+        return .{ .flags = @intFromEnum(Flags.hypervisor) };
+    }
+
+    pub fn all() PerfEventDomain {
+        return .{ .flags = user().flags | kernel().flags | hypervisor().flags };
+    }
+};
+
 const PerfMeasurement = struct {
     name: []const u8,
-    type: std.os.linux.PERF.TYPE,
-    config: u32,
+    type: std.os.linux.PERF.TYPE, // this is the perf event type (HW or SW)
+    id: u64, // this is the perf ID
+    event_domain: PerfEventDomain,
 };
 
 const PERF_MEASUREMENTS = [_]PerfMeasurement{
     .{
         .name = "cpu_cycles",
         .type = std.os.linux.PERF.TYPE.HARDWARE,
-        .config = @intFromEnum(std.os.linux.PERF.COUNT.HW.CPU_CYCLES),
+        .id = @intFromEnum(std.os.linux.PERF.COUNT.HW.CPU_CYCLES),
+        .event_domain = PerfEventDomain.all(),
+    },
+    .{
+        .name = "k_cycles",
+        .type = std.os.linux.PERF.TYPE.HARDWARE,
+        .id = @intFromEnum(std.os.linux.PERF.COUNT.HW.CPU_CYCLES),
+        .event_domain = PerfEventDomain.kernel(),
     },
     .{
         .name = "instructions",
         .type = std.os.linux.PERF.TYPE.HARDWARE,
-        .config = @intFromEnum(std.os.linux.PERF.COUNT.HW.INSTRUCTIONS),
+        .id = @intFromEnum(std.os.linux.PERF.COUNT.HW.INSTRUCTIONS),
+        .event_domain = PerfEventDomain.all(),
     },
     .{
         .name = "cache_references",
         .type = std.os.linux.PERF.TYPE.HARDWARE,
-        .config = @intFromEnum(std.os.linux.PERF.COUNT.HW.CACHE_REFERENCES),
+        .id = @intFromEnum(std.os.linux.PERF.COUNT.HW.CACHE_REFERENCES),
+        .event_domain = PerfEventDomain.all(),
     },
     .{
         .name = "cache_misses",
         .type = std.os.linux.PERF.TYPE.HARDWARE,
-        .config = @intFromEnum(std.os.linux.PERF.COUNT.HW.CACHE_MISSES),
+        .id = @intFromEnum(std.os.linux.PERF.COUNT.HW.CACHE_MISSES),
+        .event_domain = PerfEventDomain.all(),
     },
     .{
         .name = "branch_misses",
         .type = std.os.linux.PERF.TYPE.HARDWARE,
-        .config = @intFromEnum(std.os.linux.PERF.COUNT.HW.BRANCH_MISSES),
+        .id = @intFromEnum(std.os.linux.PERF.COUNT.HW.BRANCH_MISSES),
+        .event_domain = PerfEventDomain.all(),
     },
     .{
         .name = "task_clock",
         .type = std.os.linux.PERF.TYPE.SOFTWARE,
-        .config = @intFromEnum(std.os.linux.PERF.COUNT.SW.TASK_CLOCK),
+        .id = @intFromEnum(std.os.linux.PERF.COUNT.SW.TASK_CLOCK),
+        .event_domain = PerfEventDomain.all(),
     },
 };
 
@@ -64,6 +114,7 @@ pub const PerfEventBlock = struct {
         utime: u64,
         stime: u64,
         cpu_cycles: f64,
+        k_cycles: f64,
         instructions: f64,
         cache_references: f64,
         cache_misses: f64,
@@ -96,29 +147,33 @@ pub const PerfEventBlock = struct {
         return (@as(f64, @floatFromInt(event.current.value - event.prev.value))) * multiplexing_correction;
     }
 
+    fn register_counter(measurement: PerfMeasurement) std.posix.fd_t {
+        var attr: std.os.linux.perf_event_attr = .{
+            .type = measurement.type,
+            .config = measurement.id,
+            .flags = .{
+                .disabled = true,
+                .inherit = true,
+                .inherit_stat = false,
+                .exclude_kernel = !measurement.event_domain.is_kernel(),
+                .exclude_hv = !measurement.event_domain.is_hypervisor(),
+                .exclude_user = !measurement.event_domain.is_user(),
+            },
+            .read_format = 1 | 2,
+        };
+
+        const fd = std.posix.perf_event_open(&attr, 0, -1, -1, std.os.linux.PERF.FLAG.FD_CLOEXEC) catch |err| {
+            std.debug.panic("unable to open perf event: {s}\n", .{@errorName(err)});
+        };
+        return fd;
+    }
+
     pub fn init(scale: u64, print_header: bool) PerfEventBlock {
         var perf_events: [PERF_MEASUREMENTS.len]Event = [_]Event{.{}} ** PERF_MEASUREMENTS.len;
         //var perf_events = [_]u64{0} ** PERF_MEASUREMENTS.len;
         var timer = std.time.Timer.start() catch @panic("need timer to work");
         for (PERF_MEASUREMENTS, 0..) |measurement, i| {
-            var attr: std.os.linux.perf_event_attr = .{
-                .type = measurement.type,
-                .config = measurement.config,
-                .flags = .{
-                    .disabled = true,
-                    .inherit = true,
-                    .inherit_stat = false,
-                    .exclude_kernel = false,
-                    .exclude_hv = false,
-                    .exclude_user = false,
-                },
-                .read_format = 1 & 2,
-            };
-
-            const fd = std.posix.perf_event_open(&attr, 0, -1, -1, std.os.linux.PERF.FLAG.FD_CLOEXEC) catch |err| {
-                std.debug.panic("unable to open perf event: {s}\n", .{@errorName(err)});
-            };
-            perf_events[i].fd = fd;
+            perf_events[i].fd = register_counter(measurement);
         }
         const begin_rusage = std.posix.getrusage(std.posix.rusage.SELF);
 
@@ -153,12 +208,14 @@ pub const PerfEventBlock = struct {
         const end_rusage = std.posix.getrusage(std.posix.rusage.SELF);
         const scale_f = @as(f64, @floatFromInt(self.scale));
         const cycles = read_counter(&self.perf_events[0]);
+        const k_cycles = read_counter(&self.perf_events[1]);
         const task_clock = read_counter(&self.perf_events[5]);
         const sample = .{
             .wall_time = end_time - self.begin_time,
             .utime = timeval_to_ns(end_rusage.utime) - timeval_to_ns(self.begin_rusage.utime),
             .stime = timeval_to_ns(end_rusage.stime) - timeval_to_ns(self.begin_rusage.stime),
             .cpu_cycles = (cycles / scale_f),
+            .k_cycles = (k_cycles / scale_f),
             .instructions = (read_counter(&self.perf_events[1]) / scale_f),
             .cache_references = (read_counter(&self.perf_events[2]) / scale_f),
             .cache_misses = (read_counter(&self.perf_events[3]) / scale_f),
