@@ -46,4 +46,4 @@ wall_time,utime,stime,cpu_cycles,instructions,cache_references,cache_misses,bran
 
 ## Troubleshooting
 
-You may need to run sudo sysctl -w kernel.perf_event_paranoid=-1 and/or add kernel.perf_event_paranoid = -1 to /etc/sysctl.conf
+You may need to run `sudo sysctl -w kernel.perf_event_paranoid=-1` and/or add kernel.perf_event_paranoid = -1 to /etc/sysctl.conf
