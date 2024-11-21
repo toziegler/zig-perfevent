@@ -1,4 +1,5 @@
 const std = @import("std");
+const assert = std.debug.assert;
 
 const PerfMeasurement = struct {
     name: []const u8,
@@ -51,7 +52,6 @@ pub const PerfEventBlock = struct {
         current: ReadFormat = .{},
     };
 
-    //perf_fds: [PERF_MEASUREMENTS.len]std.posix.fd_t = [_]std.os.linux.fd_t{-1} ** PERF_MEASUREMENTS.len,
     perf_events: [PERF_MEASUREMENTS.len]Event = [_]Event{.{}} ** PERF_MEASUREMENTS.len,
     begin_time: u64,
     timer: std.time.Timer,
@@ -74,12 +74,12 @@ pub const PerfEventBlock = struct {
         scale: u64,
     };
 
-    fn timevalToNs(tv: std.posix.timeval) u64 {
+    fn timeval_to_ns(tv: std.posix.timeval) u64 {
         const ns_per_us = std.time.ns_per_s / std.time.us_per_s;
         return @as(usize, @bitCast(tv.tv_sec)) * std.time.ns_per_s + @as(usize, @bitCast(tv.tv_usec)) * ns_per_us;
     }
 
-    fn readPerfFd(fd: std.posix.fd_t, read_format: *Event.ReadFormat) void {
+    fn read_perf_fd(fd: std.posix.fd_t, read_format: *Event.ReadFormat) void {
         var read: usize = 0;
         var buffer = std.mem.asBytes(read_format);
         while (read < @sizeOf(Event.ReadFormat)) {
@@ -91,7 +91,7 @@ pub const PerfEventBlock = struct {
         std.debug.assert(read == @sizeOf(Event.ReadFormat));
     }
 
-    fn readCounter(event: *Event) f64 {
+    fn read_counter(event: *Event) f64 {
         const multiplexing_correction = ((@as(f64, @floatFromInt(event.current.time_enabled))) - (@as(f64, @floatFromInt(event.prev.time_enabled)))) / ((@as(f64, @floatFromInt(event.current.time_running))) - (@as(f64, @floatFromInt(event.prev.time_running))));
         return (@as(f64, @floatFromInt(event.current.value - event.prev.value))) * multiplexing_correction;
     }
@@ -123,9 +123,15 @@ pub const PerfEventBlock = struct {
         const begin_rusage = std.posix.getrusage(std.posix.rusage.SELF);
 
         for (PERF_MEASUREMENTS, 0..) |_, i| {
-            _ = std.os.linux.ioctl(perf_events[i].fd, std.os.linux.PERF.EVENT_IOC.RESET, 0);
-            _ = std.os.linux.ioctl(perf_events[i].fd, std.os.linux.PERF.EVENT_IOC.ENABLE, 0);
-            readPerfFd(perf_events[i].fd, &perf_events[i].prev);
+            {
+                const ioctl_success = std.os.linux.ioctl(perf_events[i].fd, std.os.linux.PERF.EVENT_IOC.RESET, 0);
+                if (ioctl_success != 0) @panic("ioctl return none-zero");
+            }
+            {
+                const ioctl_success = std.os.linux.ioctl(perf_events[i].fd, std.os.linux.PERF.EVENT_IOC.ENABLE, 0);
+                if (ioctl_success != 0) @panic("ioctl return none-zero");
+            }
+            read_perf_fd(perf_events[i].fd, &perf_events[i].prev);
         }
         const start = timer.read();
         return .{
@@ -140,24 +146,24 @@ pub const PerfEventBlock = struct {
 
     pub fn deinit(self: *PerfEventBlock) void {
         for (&self.perf_events) |*event| {
-            readPerfFd(event.fd, &event.current);
+            read_perf_fd(event.fd, &event.current);
         }
 
         const end_time = self.timer.read();
         const end_rusage = std.posix.getrusage(std.posix.rusage.SELF);
         const scale_f = @as(f64, @floatFromInt(self.scale));
-        const cycles = readCounter(&self.perf_events[0]);
-        const task_clock = readCounter(&self.perf_events[5]);
+        const cycles = read_counter(&self.perf_events[0]);
+        const task_clock = read_counter(&self.perf_events[5]);
         const sample = .{
             .wall_time = end_time - self.begin_time,
-            .utime = timevalToNs(end_rusage.utime) - timevalToNs(self.begin_rusage.utime),
-            .stime = timevalToNs(end_rusage.stime) - timevalToNs(self.begin_rusage.stime),
+            .utime = timeval_to_ns(end_rusage.utime) - timeval_to_ns(self.begin_rusage.utime),
+            .stime = timeval_to_ns(end_rusage.stime) - timeval_to_ns(self.begin_rusage.stime),
             .cpu_cycles = (cycles / scale_f),
-            .instructions = (readCounter(&self.perf_events[1]) / scale_f),
-            .cache_references = (readCounter(&self.perf_events[2]) / scale_f),
-            .cache_misses = (readCounter(&self.perf_events[3]) / scale_f),
-            .branch_misses = (readCounter(&self.perf_events[4]) / scale_f),
-            .CPUs = task_clock / (@as(f64, @floatFromInt(timevalToNs(end_rusage.utime) - timevalToNs(self.begin_rusage.utime)))),
+            .instructions = (read_counter(&self.perf_events[1]) / scale_f),
+            .cache_references = (read_counter(&self.perf_events[2]) / scale_f),
+            .cache_misses = (read_counter(&self.perf_events[3]) / scale_f),
+            .branch_misses = (read_counter(&self.perf_events[4]) / scale_f),
+            .CPUs = task_clock / (@as(f64, @floatFromInt(timeval_to_ns(end_rusage.utime) - timeval_to_ns(self.begin_rusage.utime)))),
             .GHZ = cycles / task_clock,
             .maxrss_mb = (@as(usize, @bitCast(end_rusage.maxrss)) / 1024),
             .scale = self.scale,
