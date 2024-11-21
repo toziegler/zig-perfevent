@@ -38,6 +38,7 @@ const PerfEventDomain = struct {
     }
 };
 
+// This is the perf measurement event
 const PerfMeasurement = struct {
     name: []const u8,
     type: std.os.linux.PERF.TYPE, // this is the perf event type (HW or SW)
@@ -108,8 +109,10 @@ pub const PerfEventBlock = struct {
     begin_rusage: std.posix.system.rusage,
     print_header: bool,
     scale: u64,
+    name: []const u8,
 
     const Sample = struct {
+        name: []const u8,
         wall_time: u64,
         utime: u64,
         stime: u64,
@@ -168,7 +171,7 @@ pub const PerfEventBlock = struct {
         return fd;
     }
 
-    pub fn init(scale: u64, print_header: bool) PerfEventBlock {
+    pub fn init(name: []const u8, scale: u64, print_header: bool) PerfEventBlock {
         var perf_events: [PERF_MEASUREMENTS.len]Event = [_]Event{.{}} ** PERF_MEASUREMENTS.len;
         //var perf_events = [_]u64{0} ** PERF_MEASUREMENTS.len;
         var timer = std.time.Timer.start() catch @panic("need timer to work");
@@ -196,6 +199,7 @@ pub const PerfEventBlock = struct {
             .begin_rusage = begin_rusage,
             .print_header = print_header,
             .scale = scale,
+            .name = name,
         };
     }
 
@@ -211,6 +215,7 @@ pub const PerfEventBlock = struct {
         const k_cycles = read_counter(&self.perf_events[1]);
         const task_clock = read_counter(&self.perf_events[5]);
         const sample = .{
+            .name = self.name,
             .wall_time = end_time - self.begin_time,
             .utime = timeval_to_ns(end_rusage.utime) - timeval_to_ns(self.begin_rusage.utime),
             .stime = timeval_to_ns(end_rusage.stime) - timeval_to_ns(self.begin_rusage.stime),
@@ -238,13 +243,41 @@ pub const PerfEventBlock = struct {
             }
             writer.print("\n", .{}) catch {};
         }
-        // body
+        // body dispatch by type to print the correct format
         {
+            // TODO: replace this with the zig-csv-writer crate, but we are not allowed to fail here.
             inline for (std.meta.fields(@TypeOf(sample)), 0..) |f, i| {
                 if (i > 0) writer.print(",", .{}) catch {};
-                writer.print("{d:.2}", .{@field(sample, f.name)}) catch {
-                    std.log.debug("", .{});
-                };
+                switch (@typeInfo(f.type)) {
+                    .Int => {
+                        writer.print("{d}", .{@field(sample, f.name)}) catch {
+                            std.log.debug("", .{});
+                        };
+                    },
+                    .Float => {
+                        writer.print("{d:.2}", .{@field(sample, f.name)}) catch {
+                            std.log.debug("", .{});
+                        };
+                    },
+                    .Pointer => {
+                        writer.print("{s}", .{@field(sample, f.name)}) catch {
+                            std.log.debug("", .{});
+                        };
+                    },
+                    .Bool => {
+                        writer.print("{}", .{@field(sample, f.name)}) catch {
+                            std.log.debug("", .{});
+                        };
+                    },
+                    .Enum => {
+                        writer.print("{any}", .{@field(sample, f.name)}) catch {
+                            std.log.debug("", .{});
+                        };
+                    },
+                    else => {
+                        @panic("Type not supported for serialization");
+                    },
+                }
             }
             writer.print("\n", .{}) catch {};
         }

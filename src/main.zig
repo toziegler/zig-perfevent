@@ -16,7 +16,7 @@ pub fn name() !void {
 }
 
 pub fn main() !void {
-    var perf = perfevent.PerfEventBlock.init(1000000, true);
+    var perf = perfevent.PerfEventBlock.init("demo", 1000000, true);
     defer perf.deinit();
     try name();
 }
