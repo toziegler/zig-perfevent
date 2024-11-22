@@ -172,7 +172,10 @@ pub fn PerfEventBlockType(comptime BenchParamType: type) type {
             };
 
             const fd = std.posix.perf_event_open(&attr, 0, -1, -1, std.os.linux.PERF.FLAG.FD_CLOEXEC) catch |err| {
-                std.debug.panic("unable to open perf event: {s}\n", .{@errorName(err)});
+                switch (err) {
+                    error.PermissionDenied => std.debug.panic("PermissionDenied: Adjust the permissions by executing e.g. `echo '-1' | sudo tee /proc/sys/kernel/perf_event_paranoid`", .{}),
+                    else => std.debug.panic("Unable to open perf event: {s}\n", .{@errorName(err)}),
+                }
             };
             return fd;
         }
