@@ -128,6 +128,7 @@ pub fn PerfEventBlockType(comptime BenchParamType: type) type {
             cache_references: f64,
             cache_misses: f64,
             branch_misses: f64,
+            ipc: f64,
             GHZ: f64,
             CPUs: f64,
             maxrss_mb: usize,
@@ -226,14 +227,16 @@ pub fn PerfEventBlockType(comptime BenchParamType: type) type {
             const cycles = read_counter(&self.perf_events[0]);
             const k_cycles = read_counter(&self.perf_events[1]);
             const task_clock = read_counter(&self.perf_events[6]);
+            const instructions = (read_counter(&self.perf_events[2]));
             const sample = .{
                 .wall_time = @as(f64, @floatFromInt(end_time - self.begin_time)) / std.time.ns_per_s,
                 .cpu_cycles = (cycles / scale_f),
                 .k_cycles = (k_cycles / scale_f),
-                .instructions = (read_counter(&self.perf_events[2]) / scale_f),
+                .instructions = (instructions / scale_f),
                 .cache_references = (read_counter(&self.perf_events[3]) / scale_f),
                 .cache_misses = (read_counter(&self.perf_events[4]) / scale_f),
                 .branch_misses = (read_counter(&self.perf_events[5]) / scale_f),
+                .ipc = instructions / cycles,
                 .CPUs = task_clock / (@as(f64, @floatFromInt(timeval_to_ns(end_rusage.utime) - timeval_to_ns(self.begin_rusage.utime)))),
                 .GHZ = cycles / task_clock,
                 .maxrss_mb = (@as(usize, @bitCast(end_rusage.maxrss)) / 1024),
