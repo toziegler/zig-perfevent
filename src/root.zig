@@ -137,7 +137,7 @@ pub fn PerfEventBlockType(comptime BenchParamType: type) type {
 
         fn timeval_to_ns(tv: std.posix.timeval) u64 {
             const ns_per_us = std.time.ns_per_s / std.time.us_per_s;
-            return @as(usize, @bitCast(tv.tv_sec)) * std.time.ns_per_s + @as(usize, @bitCast(tv.tv_usec)) * ns_per_us;
+            return @as(usize, @bitCast(tv.sec)) * std.time.ns_per_s + @as(usize, @bitCast(tv.usec)) * ns_per_us;
         }
 
         fn read_perf_fd(fd: std.posix.fd_t, read_format: *Event.ReadFormat) void {
@@ -228,7 +228,7 @@ pub fn PerfEventBlockType(comptime BenchParamType: type) type {
             const k_cycles = read_counter(&self.perf_events[1]);
             const task_clock = read_counter(&self.perf_events[6]);
             const instructions = (read_counter(&self.perf_events[2]));
-            const sample = .{
+            const sample = Sample{
                 .wall_time = @as(f64, @floatFromInt(end_time - self.begin_time)) / std.time.ns_per_s,
                 .cpu_cycles = (cycles / scale_f),
                 .k_cycles = (k_cycles / scale_f),
@@ -278,27 +278,27 @@ pub fn PerfEventBlockType(comptime BenchParamType: type) type {
             inline for (std.meta.fields(@TypeOf(row)), 0..) |f, i| {
                 if (i > 0) writer.print(",", .{}) catch {};
                 switch (@typeInfo(f.type)) {
-                    .Int => {
+                    .int => {
                         writer.print("{d}", .{@field(row, f.name)}) catch {
                             std.log.debug("", .{});
                         };
                     },
-                    .Float => {
+                    .float => {
                         writer.print("{d:.2}", .{@field(row, f.name)}) catch {
                             std.log.debug("", .{});
                         };
                     },
-                    .Pointer => {
+                    .pointer => {
                         writer.print("{s}", .{@field(row, f.name)}) catch {
                             std.log.debug("", .{});
                         };
                     },
-                    .Bool => {
+                    .bool => {
                         writer.print("{}", .{@field(row, f.name)}) catch {
                             std.log.debug("", .{});
                         };
                     },
-                    .Enum => {
+                    .@"enum" => {
                         writer.print("{any}", .{@field(row, f.name)}) catch {
                             std.log.debug("", .{});
                         };
