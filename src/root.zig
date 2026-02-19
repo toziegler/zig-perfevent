@@ -1,6 +1,16 @@
 const std = @import("std");
 const assert = std.debug.assert;
 
+const PERF = std.os.linux.PERF; // handy alias
+
+inline fn hwCacheConfig(
+    cache: PERF.COUNT.HW.CACHE,
+    op: PERF.COUNT.HW.CACHE.OP,
+    result: PERF.COUNT.HW.CACHE.RESULT,
+) u64 {
+    return (@as(u64, @intFromEnum(cache))) | (@as(u64, @intFromEnum(op)) << 8) | (@as(u64, @intFromEnum(result)) << 16);
+}
+
 // bit flags of event domains
 const PerfEventDomain = struct {
     const Flags = enum(u32) {
@@ -63,37 +73,56 @@ const PERF_MEASUREMENTS = [_]PerfMeasurement{
     },
     // 2
     .{
+        .name = "s_cycles",
+        .type = std.os.linux.PERF.TYPE.RAW,
+        .id = 0x43FFAE,
+        .event_domain = PerfEventDomain.all(),
+    },
+    // 3
+    .{
         .name = "instructions",
         .type = std.os.linux.PERF.TYPE.HARDWARE,
         .id = @intFromEnum(std.os.linux.PERF.COUNT.HW.INSTRUCTIONS),
         .event_domain = PerfEventDomain.all(),
     },
-    // 3
+    // 4
     .{
         .name = "cache_references",
         .type = std.os.linux.PERF.TYPE.HARDWARE,
         .id = @intFromEnum(std.os.linux.PERF.COUNT.HW.CACHE_REFERENCES),
         .event_domain = PerfEventDomain.all(),
     },
-    // 4
+    // 5
     .{
         .name = "cache_misses",
         .type = std.os.linux.PERF.TYPE.HARDWARE,
         .id = @intFromEnum(std.os.linux.PERF.COUNT.HW.CACHE_MISSES),
         .event_domain = PerfEventDomain.all(),
     },
-    // 5
+    // 6
     .{
         .name = "branch_misses",
         .type = std.os.linux.PERF.TYPE.HARDWARE,
         .id = @intFromEnum(std.os.linux.PERF.COUNT.HW.BRANCH_MISSES),
         .event_domain = PerfEventDomain.all(),
     },
-    // 6
+    // 7
     .{
         .name = "task_clock",
         .type = std.os.linux.PERF.TYPE.SOFTWARE,
         .id = @intFromEnum(std.os.linux.PERF.COUNT.SW.TASK_CLOCK),
+        .event_domain = PerfEventDomain.all(),
+    },
+
+    // 8
+    .{
+        .name = "dtlb_load_misses",
+        .type = PERF.TYPE.HW_CACHE,
+        .id = hwCacheConfig(
+            PERF.COUNT.HW.CACHE.DTLB,
+            PERF.COUNT.HW.CACHE.OP.READ,
+            PERF.COUNT.HW.CACHE.RESULT.MISS,
+        ),
         .event_domain = PerfEventDomain.all(),
     },
 };
@@ -124,10 +153,14 @@ pub fn PerfEventBlockType(comptime BenchParamType: type) type {
             wall_time: f64,
             cpu_cycles: f64,
             k_cycles: f64,
+            s_cycles: f64,
             instructions: f64,
             cache_references: f64,
             cache_misses: f64,
             branch_misses: f64,
+            // NEW:
+            dtlb_load_misses: f64,
+
             ipc: f64,
             GHZ: f64,
             CPUs: f64,
@@ -226,16 +259,20 @@ pub fn PerfEventBlockType(comptime BenchParamType: type) type {
             const scale_f = @as(f64, @floatFromInt(self.scale));
             const cycles = read_counter(&self.perf_events[0]);
             const k_cycles = read_counter(&self.perf_events[1]);
-            const task_clock = read_counter(&self.perf_events[6]);
-            const instructions = (read_counter(&self.perf_events[2]));
+            const s_cycles = read_counter(&self.perf_events[2]);
+            const task_clock = read_counter(&self.perf_events[7]);
+            const instructions = (read_counter(&self.perf_events[3]));
+            const dtlb_load_misses = read_counter(&self.perf_events[8]);
             const sample = Sample{
                 .wall_time = @as(f64, @floatFromInt(end_time - self.begin_time)) / std.time.ns_per_s,
                 .cpu_cycles = (cycles / scale_f),
                 .k_cycles = (k_cycles / scale_f),
+                .s_cycles = (s_cycles / scale_f),
                 .instructions = (instructions / scale_f),
-                .cache_references = (read_counter(&self.perf_events[3]) / scale_f),
-                .cache_misses = (read_counter(&self.perf_events[4]) / scale_f),
-                .branch_misses = (read_counter(&self.perf_events[5]) / scale_f),
+                .cache_references = (read_counter(&self.perf_events[4]) / scale_f),
+                .cache_misses = (read_counter(&self.perf_events[5]) / scale_f),
+                .branch_misses = (read_counter(&self.perf_events[6]) / scale_f),
+                .dtlb_load_misses = (dtlb_load_misses / scale_f),
                 .ipc = instructions / cycles,
                 .CPUs = task_clock / (@as(f64, @floatFromInt(timeval_to_ns(end_rusage.utime) - timeval_to_ns(self.begin_rusage.utime)))),
                 .GHZ = cycles / task_clock,
@@ -247,7 +284,7 @@ pub fn PerfEventBlockType(comptime BenchParamType: type) type {
                 event.fd = -1;
             }
             // normalization and print
-            const writer = std.io.getStdOut().writer();
+            const writer = std.io.getStdErr().writer();
 
             if (self.print_header) {
                 // benchmark params
